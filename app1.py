@@ -13,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 常量定义 ---
+# --- 常量定义：模型和资源文件路径 ---
 MARKET_MODEL_PATH = 'market_segment_lgbm_model.joblib'
 PRICE_LEVEL_MODEL_PATH = 'price_level_rf_model.joblib'
 REGRESSION_MODEL_PATH = 'unit_price_rf_model.joblib'
@@ -24,7 +24,7 @@ MAPPINGS_PATH = 'mappings.joblib'
 # --- 加载资源函数 (使用缓存) ---
 @st.cache_resource
 def load_resources():
-    """加载所有必要的资源文件。"""
+    """加载所有必要的资源文件 (模型, scaler, 特征名, 映射关系)。"""
     resources = {}
     all_files_exist = True
     required_files = [MARKET_MODEL_PATH, PRICE_LEVEL_MODEL_PATH, REGRESSION_MODEL_PATH,
@@ -36,7 +36,7 @@ def load_resources():
             missing_files.append(file_path)
             all_files_exist = False
     if not all_files_exist:
-        print(f"错误：缺少文件 {missing_files}。")
+        print(f"错误：缺少文件 {missing_files}。请确保所有 .joblib 文件与 app.py 在同一目录。")
         return None, missing_files
     try:
         resources['market_model'] = joblib.load(MARKET_MODEL_PATH)
@@ -46,55 +46,85 @@ def load_resources():
         resources['feature_names'] = joblib.load(FEATURE_NAMES_PATH)
         resources['mappings'] = joblib.load(MAPPINGS_PATH)
         print("所有资源加载成功。")
+        print("从文件加载的映射关系:", resources['mappings'])
+        print("从文件加载的特征名称:", resources['feature_names'])
         return resources, None
     except Exception as e:
         print(f"加载资源时发生错误: {e}")
         return None, [f"加载错误: {e}"]
 
-# --- 辅助函数：格式化下拉框选项 ---
-def format_mapping_options_for_selectbox(name_to_code_mapping):
-    """为 Streamlit Selectbox 准备选项和格式化函数所需的数据。"""
-    if not isinstance(name_to_code_mapping, dict): return {}
-    code_to_display_string = {}
-    try:
-        try:
-            sorted_items = sorted(name_to_code_mapping.items(), key=lambda item: int(item[1]))
-        except ValueError:
-             sorted_items = sorted(name_to_code_mapping.items(), key=lambda item: str(item[1]))
-        for name, code in sorted_items:
-            try: code_key = int(code)
-            except ValueError: code_key = str(code)
-            code_to_display_string[code_key] = f"{str(name)} ({code})"
-        return code_to_display_string
-    except Exception as e:
-        print(f"[格式化错误] 格式化选项时出错: {e}")
-        return {v: f"{k} ({v})" for k, v in name_to_code_mapping.items()} # Fallback
-
-# --- 加载资源 ---
 resources, load_error_info = load_resources()
 
-# --- Streamlit 用户界面 ---
+# --- 辅助函数 ---
+def format_mapping_options_for_selectbox(name_to_code_mapping):
+    """为 Streamlit Selectbox 准备选项和格式化函数所需的数据。"""
+    if not isinstance(name_to_code_mapping, dict):
+        print(f"[格式化错误] 输入非字典: {type(name_to_code_mapping)}")
+        return {}
+    code_to_display_string = {}
+    try:
+        # Sort by code (assuming codes are numeric or string-numeric)
+        sorted_items = sorted(name_to_code_mapping.items(), key=lambda item: int(item[1]))
+        for name, code in sorted_items:
+             # Ensure code is treated as int for dictionary keys if possible
+             try:
+                 code_key = int(code)
+                 name_str = str(name)
+                 code_to_display_string[code_key] = f"{name_str} ({code_key})"
+             except (ValueError, TypeError):
+                 # Handle cases where code might not be convertible to int (less common for mappings)
+                 code_key = str(code)
+                 name_str = str(name)
+                 code_to_display_string[code_key] = f"{name_str} ({code_key})"
+
+        return code_to_display_string
+    except Exception as e: # Catch broader exceptions during sorting/conversion
+        print(f"[格式化错误] 转换/排序时出错: {e}")
+        # Fallback: create map without sorting if sorting fails
+        fallback_map = {}
+        for k, v in name_to_code_mapping.items():
+             try:
+                 code_key = int(v)
+                 fallback_map[code_key] = f"{str(k)} ({code_key})"
+             except (ValueError, TypeError):
+                 code_key = str(v)
+                 fallback_map[code_key] = f"{str(k)} ({code_key})"
+        return fallback_map
+
+# --- Streamlit 用户界面主要部分 ---
 st.title("🏠 盐城二手房智能分析与预测")
 st.markdown("""
-在左侧输入房产特征，点击按钮开始分析。系统会根据您提供的信息，尝试进行以下预测：
-1.  **市场细分**: 房产在市场中的定位。
-2.  **价格水平**: 房产单价与其区域均值的比较。
-3.  **均价预测**: 房产的每平方米单价。
+欢迎使用盐城二手房分析工具！请在左侧边栏输入房产特征，我们将为您提供三个维度的预测：
+1.  **市场细分预测**: 判断房产属于低端、中端还是高端市场。
+2.  **价格水平预测**: 判断房产单价是否高于其所在区域的平均水平。
+3.  **房产均价预测**: 预测房产的每平方米单价（元/㎡）。
 """)
 st.markdown("---")
 
-# --- 资源加载失败处理 ---
+# --- 应用启动时资源加载失败或映射缺失的处理 ---
 if not resources:
      st.error("❌ **应用程序初始化失败！**")
      if load_error_info:
-         st.warning("无法加载必要的资源文件。错误详情:")
-         for error in load_error_info: st.markdown(f"*   `{error}`")
+         st.warning(f"无法加载必要的资源文件。错误详情:")
+         for error in load_error_info:
+             st.markdown(f"*   `{error}`")
      else:
          st.warning("无法找到一个或多个必需的资源文件。")
-     st.markdown("请检查所有 `.joblib` 文件是否与 `app.py` 在同一目录且文件有效。")
+     st.markdown(f"""
+        请检查以下几点：
+        *   确认以下所有 `.joblib` 文件都与 `app.py` 文件在 **同一个** 目录下:
+            *   `{MARKET_MODEL_PATH}`
+            *   `{PRICE_LEVEL_MODEL_PATH}`
+            *   `{REGRESSION_MODEL_PATH}`
+            *   `{SCALER_PATH}`
+            *   `{FEATURE_NAMES_PATH}`
+            *   `{MAPPINGS_PATH}`
+        *   确保 `{MAPPINGS_PATH}` 和 `{FEATURE_NAMES_PATH}` 文件内容有效。
+        *   检查运行 Streamlit 的终端是否有更详细的错误信息。
+     """)
      st.stop()
 
-# --- 资源检查 ---
+# --- 如果资源加载成功 ---
 mappings = resources['mappings']
 feature_names = resources['feature_names']
 market_model = resources['market_model']
@@ -102,283 +132,251 @@ price_level_model = resources['price_level_model']
 regression_model = resources['regression_model']
 scaler = resources['scaler']
 
+# --- 检查资源文件内容 ---
 required_mappings = ['方位', '楼层', '所属区域', '房龄', '市场类别', '是否高于区域均价']
 required_features = ['market', 'price_level', 'regression']
 valid_resources = True
 missing_or_invalid = []
+
 for key in required_mappings:
     if key not in mappings or not isinstance(mappings.get(key), dict):
-        missing_or_invalid.append(f"映射 '{key}'")
+        missing_or_invalid.append(f"映射 '{key}' (来自 {MAPPINGS_PATH})")
         valid_resources = False
+
 for key in required_features:
     if key not in feature_names or not isinstance(feature_names.get(key), list):
-        missing_or_invalid.append(f"特征列表 '{key}'")
+        missing_or_invalid.append(f"特征列表 '{key}' (来自 {FEATURE_NAMES_PATH})")
         valid_resources = False
+
 if not valid_resources:
-    st.error(f"❌ 资源文件内容不完整或格式错误。缺少或无效的项目: {', '.join(missing_or_invalid)}")
+    st.error(f"❌ **资源文件内容错误！**")
+    st.warning("以下必需的映射或特征列表在资源文件中缺失、无效或格式错误：")
+    for item in missing_or_invalid:
+        st.markdown(f"*   {item}")
+    st.warning(f"请检查 `{MAPPINGS_PATH}` 和 `{FEATURE_NAMES_PATH}` 文件内容。")
     st.stop()
 
 # --- 侧边栏输入控件 ---
 st.sidebar.header("🏘️ 房产特征输入")
-st.sidebar.info("请尽量提供完整信息以获得更全面的预测。") # 提示用户输入完整性
-
 st.sidebar.subheader("选择项特征")
-selectbox_inputs = {}
-all_select_valid = True
 
+selectbox_inputs = {}
+categorical_feature_keys = ['方位', '楼层', '所属区域', '房龄'] # Keys for selectbox inputs
+
+# Helper function for selectbox creation to avoid repetition
 def create_selectbox(label, mapping_key, help_text, key_suffix):
-    global all_select_valid
     try:
         options_map = mappings[mapping_key]
         display_map = format_mapping_options_for_selectbox(options_map)
-        if not display_map: raise ValueError(f"映射 '{mapping_key}' 格式化后为空。")
-        options_codes = list(display_map.keys())
-        default_index = 0
-        if options_codes:
-            common_defaults = {'楼层': 1, '房龄': 2}
-            if mapping_key in common_defaults and common_defaults[mapping_key] in options_codes:
-                 try: default_index = options_codes.index(common_defaults[mapping_key])
-                 except ValueError: pass
-            elif len(options_codes) > 1: default_index = len(options_codes) // 2
-        selected_value = st.sidebar.selectbox(label, options=options_codes, index=default_index,
-                                            format_func=lambda x: display_map.get(x, f"未知 ({x})"),
-                                            key=f"{key_suffix}_select", help=help_text)
-        return selected_value
-    except Exception as e:
-        st.sidebar.error(f"加载 '{label}' 选项出错: {e}")
-        all_select_valid = False; return None
+        # Add "None" option at the beginning
+        options_codes = [None] + list(display_map.keys())
+        # Format function to handle None
+        def format_func(x):
+            if x is None:
+                return "--- 请选择 ---"
+            return display_map.get(x, f"未知代码 ({x})")
 
-selectbox_inputs['方位'] = create_selectbox("房屋方位:", '方位', "选择房屋的主要朝向。", "orientation")
-selectbox_inputs['楼层'] = create_selectbox("楼层位置:", '楼层', "选择房屋所在楼层的大致位置（低、中、高）。", "floor_level")
-selectbox_inputs['所属区域'] = create_selectbox("所属区域:", '所属区域', "选择房产所在的行政区域或板块。", "district")
-selectbox_inputs['房龄'] = create_selectbox("房龄:", '房龄', "选择房屋的建造年限范围。", "age")
+        # Use index=0 to default to "--- 请选择 ---"
+        selectbox_inputs[mapping_key] = st.sidebar.selectbox(
+            f"{label}:",
+            options=options_codes,
+            index=0, # Default to "--- 请选择 ---"
+            format_func=format_func,
+            key=f"{key_suffix}_select",
+            help=help_text
+        )
+    except Exception as e:
+        st.sidebar.error(f"{label} 选项加载错误: {e}")
+        selectbox_inputs[mapping_key] = None # Mark as error
+
+create_selectbox("房屋方位", '方位', "选择房屋的主要朝向。如果未知或不适用，请保留'请选择'。", "orientation")
+create_selectbox("楼层位置", '楼层', "选择房屋所在的楼层范围（低、中、高）。如果未知或不适用，请保留'请选择'。", "floor_level")
+create_selectbox("所属区域", '所属区域', "选择房产所在的盐城市主要区域。如果未知或不适用，请保留'请选择'。", "district")
+create_selectbox("房龄范围", '房龄', "选择房屋的建造年限范围。如果未知或不适用，请保留'请选择'。", "age")
+
 
 st.sidebar.subheader("数值项特征")
 numeric_inputs = {}
-# --- 创建数值输入，允许用户不输入（或输入特定值表示缺失，但streamlit number_input强制要求有值，所以我们后面判断） ---
-# 注意：Streamlit number_input 不直接支持"空"值。如果用户想表示缺失，他们可以保留默认值，
-# 或者我们可以在代码逻辑中判断某个值（如0或-1，如果业务允许）代表缺失。
-# 这里我们假设用户会输入实际值，如果模型需要的值没输入（或保留了不适用的默认值），模型输入检查会捕捉到。
-numeric_inputs['总价(万)'] = st.sidebar.number_input("总价 (万):", min_value=0.0, max_value=3000.0, value=120.0, step=5.0, format="%.1f", key="total_price", help="输入房产的总价（万元）。如果未知，保留默认或输入0（模型会判断是否需要）。")
-numeric_inputs['面积(㎡)'] = st.sidebar.number_input("面积 (㎡):", min_value=10.0, max_value=1000.0, value=95.0, step=1.0, format="%.1f", key="area_sqm", help="输入房产的建筑面积（平方米）。")
-numeric_inputs['建造时间'] = st.sidebar.number_input("建造时间 (年份):", min_value=1950, max_value=2025, value=2015, step=1, format="%d", key="build_year", help="输入房屋的建造年份。")
-numeric_inputs['楼层数'] = st.sidebar.number_input("总楼层数:", min_value=1, max_value=80, value=18, step=1, format="%d", key="floor_num", help="输入楼栋的总楼层数。")
-numeric_inputs['室'] = st.sidebar.number_input("室:", min_value=1, max_value=15, value=3, step=1, format="%d", key="rooms", help="输入卧室数量。")
-numeric_inputs['厅'] = st.sidebar.number_input("厅:", min_value=0, max_value=10, value=2, step=1, format="%d", key="halls", help="输入客厅/餐厅数量。")
-numeric_inputs['卫'] = st.sidebar.number_input("卫:", min_value=0, max_value=8, value=1, step=1, format="%d", key="baths", help="输入卫生间数量。")
+numeric_inputs['总价(万)'] = st.sidebar.number_input("总价 (万):", min_value=10.0, max_value=1500.0, value=100.0, step=5.0, format="%.1f", key="total_price", help="输入房产的总价，单位万元。")
+numeric_inputs['面积(㎡)'] = st.sidebar.number_input("面积 (㎡):", min_value=30.0, max_value=600.0, value=100.0, step=5.0, format="%.1f", key="area_sqm", help="输入房产的建筑面积，单位平方米。")
+numeric_inputs['建造时间'] = st.sidebar.number_input("建造时间 (年份):", min_value=1970, max_value=2025, value=2018, step=1, format="%d", key="build_year", help="输入房屋的建造年份。")
+numeric_inputs['楼层数'] = st.sidebar.number_input("总楼层数:", min_value=1, max_value=60, value=18, step=1, format="%d", key="floor_num", help="输入楼栋的总楼层数。")
+numeric_inputs['室'] = st.sidebar.number_input("室:", min_value=1, max_value=10, value=3, step=1, format="%d", key="rooms", help="输入卧室数量。")
+numeric_inputs['厅'] = st.sidebar.number_input("厅:", min_value=0, max_value=5, value=2, step=1, format="%d", key="halls", help="输入客厅/餐厅数量。")
+numeric_inputs['卫'] = st.sidebar.number_input("卫:", min_value=0, max_value=5, value=1, step=1, format="%d", key="baths", help="输入卫生间数量。")
 
 # --- 预测触发按钮 ---
 st.sidebar.markdown("---")
-predict_button_disabled = not all_select_valid
-predict_button_help = "点击开始分析预测" if all_select_valid else "部分下拉选项加载失败，无法预测。"
+if st.sidebar.button("🚀 开始分析预测", type="primary", use_container_width=True, help="点击这里根据输入的特征进行预测分析"):
 
-if st.sidebar.button("🚀 开始分析预测", type="primary", use_container_width=True, help=predict_button_help, disabled=predict_button_disabled):
-
-    # --- 初始化预测结果状态 ---
-    market_pred_status = "not_run" # 状态: not_run, success, insufficient_data, error
-    market_pred_result = None
-    market_missing_features = []
-    market_error_msg = ""
-
-    price_level_pred_status = "not_run"
-    price_level_pred_result = None # 存储 (标签, 编码)
-    price_level_missing_features = []
-    price_level_error_msg = ""
-
-    regression_pred_status = "not_run"
-    regression_pred_result = None # 存储预测值
-    regression_missing_features = []
-    regression_error_msg = ""
-
-    runtime_errors = [] # 存储预测执行期间的非输入性错误
-
-    # 合并所有输入
+    # Combine all inputs
     all_inputs = {**selectbox_inputs, **numeric_inputs}
-    if None in selectbox_inputs.values(): # 再次检查下拉框
-        st.error("⚠️ 输入错误：检测到无效的下拉选择项。")
+    error_messages = []
+    prediction_results = {} # Store results or status for each model
+
+    # --- Define required features for each model ---
+    try:
+        market_features_needed = feature_names['market']
+        price_level_features_needed = feature_names['price_level']
+        regression_features_needed = feature_names['regression']
+    except KeyError as e:
+        st.error(f"加载特征名称时出错: 缺少键 {e}。请检查 `feature_names.joblib` 文件。")
+        st.stop() # Stop execution if feature names are missing
+
+    # --- Helper to check for missing categorical inputs for a given model ---
+    def check_missing_categoricals(model_features, all_inputs, categorical_keys):
+        missing = []
+        for feature in model_features:
+            if feature in categorical_keys and all_inputs.get(feature) is None:
+                missing.append(feature)
+        return missing
+
+    # --- 1. 市场细分预测 ---
+    market_pred_label = "待处理"
+    market_missing_cats = check_missing_categoricals(market_features_needed, all_inputs, categorical_feature_keys)
+    if market_missing_cats:
+        market_pred_label = f"数据不足，无法判断 (缺少: {', '.join(market_missing_cats)})"
     else:
-        # --- 1. 尝试市场细分预测 ---
         try:
-            market_features_needed = feature_names.get('market', [])
-            input_data_market = {}
-            market_missing_features = []
-            for feat in market_features_needed:
-                if feat in all_inputs:
-                    input_data_market[feat] = all_inputs[feat]
-                else:
-                    market_missing_features.append(feat)
+            input_data_market = {feat: all_inputs[feat] for feat in market_features_needed if feat in all_inputs}
+            # Check if all *needed* features are present (including numerical if any)
+            if len(input_data_market) != len(market_features_needed):
+                missing_keys = set(market_features_needed) - set(input_data_market.keys())
+                raise ValueError(f"市场细分模型缺少输入特征: {missing_keys}") # Should not happen if all inputs are gathered
 
-            if market_missing_features: # 如果缺少必需特征
-                market_pred_status = "insufficient_data"
-            else: # 特征齐全，尝试预测
-                input_df_market = pd.DataFrame([input_data_market])[market_features_needed]
-                market_pred_code = market_model.predict(input_df_market)[0]
-                market_output_map = mappings.get('市场类别', {})
-                market_pred_key = int(market_pred_code) if isinstance(market_pred_code, (int, np.integer)) else str(market_pred_code)
-                market_pred_result = market_output_map.get(market_pred_key, f"未知编码({market_pred_key})")
-                market_pred_status = "success"
+            input_df_market = pd.DataFrame([input_data_market])[market_features_needed] # Ensure column order
+            market_pred_code = market_model.predict(input_df_market)[0]
+            market_output_map_inv = {v: k for k, v in mappings.get('市场类别', {}).items()} # Inverse map: code -> name
+            market_pred_label = market_output_map_inv.get(int(market_pred_code), f"预测编码无效 ({market_pred_code})")
         except Exception as e:
-            market_pred_status = "error"
-            market_error_msg = f"市场细分模型运行时出错: {e}"
-            runtime_errors.append(market_error_msg)
-            print(market_error_msg)
+            msg = f"市场细分模型预测出错: {e}"
+            print(msg)
+            error_messages.append(msg)
+            market_pred_label = "预测失败"
+    prediction_results['market'] = market_pred_label
 
-        # --- 2. 尝试价格水平预测 ---
+    # --- 2. 价格水平预测 ---
+    price_level_pred_label = "待处理"
+    price_level_pred_code = -1 # Default code
+    price_level_missing_cats = check_missing_categoricals(price_level_features_needed, all_inputs, categorical_feature_keys)
+    if price_level_missing_cats:
+         price_level_pred_label = f"数据不足，无法判断 (缺少: {', '.join(price_level_missing_cats)})"
+    else:
         try:
-            price_level_features_needed = feature_names.get('price_level', [])
-            input_data_price_level = {}
-            price_level_missing_features = []
-            for feat in price_level_features_needed:
-                if feat in all_inputs:
-                    # 特别检查：如果总价是必需的，但用户输入了0或不合理的值，可能也视为不足
-                    # 这里简化处理：仅检查是否存在于 all_inputs
-                    input_data_price_level[feat] = all_inputs[feat]
-                else:
-                    price_level_missing_features.append(feat)
+            input_data_price_level = {feat: all_inputs[feat] for feat in price_level_features_needed if feat in all_inputs}
+            if len(input_data_price_level) != len(price_level_features_needed):
+                missing_keys = set(price_level_features_needed) - set(input_data_price_level.keys())
+                raise ValueError(f"价格水平模型缺少输入特征: {missing_keys}")
 
-            if price_level_missing_features: # 缺少特征
-                price_level_pred_status = "insufficient_data"
-            else: # 特征齐全
-                input_df_price_level = pd.DataFrame([input_data_price_level])[price_level_features_needed]
-                price_level_pred_code = price_level_model.predict(input_df_price_level)[0]
-                price_level_output_map = mappings.get('是否高于区域均价', {})
-                price_level_pred_key = int(price_level_pred_code) if isinstance(price_level_pred_code, (int, np.integer)) else str(price_level_pred_code)
-                price_level_label = price_level_output_map.get(price_level_pred_key, f"未知编码({price_level_pred_key})")
-                # 存储标签和编码
-                price_level_pred_result = (price_level_label, int(price_level_pred_code) if isinstance(price_level_pred_code, (int, np.integer)) else -99)
-                price_level_pred_status = "success"
+            input_df_price_level = pd.DataFrame([input_data_price_level])[price_level_features_needed]
+            price_level_pred_code = int(price_level_model.predict(input_df_price_level)[0])
+            price_level_output_map_inv = {v: k for k, v in mappings.get('是否高于区域均价', {}).items()} # Inverse map
+            price_level_pred_label = price_level_output_map_inv.get(price_level_pred_code, f"预测编码无效 ({price_level_pred_code})")
         except Exception as e:
-            price_level_pred_status = "error"
-            price_level_error_msg = f"价格水平模型运行时出错: {e}"
-            runtime_errors.append(price_level_error_msg)
-            print(price_level_error_msg)
+            msg = f"价格水平模型预测出错: {e}"
+            print(msg)
+            error_messages.append(msg)
+            price_level_pred_label = "预测失败"
+    prediction_results['price_level'] = price_level_pred_label
+    prediction_results['price_level_code'] = price_level_pred_code # Store code for coloring
 
-
-        # --- 3. 尝试均价预测 ---
+    # --- 3. 回归预测 (均价) ---
+    unit_price_pred_display = "待处理" # String for display
+    unit_price_pred_value = -1 # Numerical value, -1 indicates error or not calculated
+    regression_missing_cats = check_missing_categoricals(regression_features_needed, all_inputs, categorical_feature_keys)
+    if regression_missing_cats:
+         unit_price_pred_display = f"数据不足，无法判断 (缺少: {', '.join(regression_missing_cats)})"
+    else:
         try:
-            regression_features_needed = feature_names.get('regression', [])
-            input_data_reg = {}
-            regression_missing_features = []
-            for feat in regression_features_needed:
-                 if feat in all_inputs:
-                    input_data_reg[feat] = all_inputs[feat]
-                 else:
-                    regression_missing_features.append(feat)
+            input_data_reg = {feat: all_inputs[feat] for feat in regression_features_needed if feat in all_inputs}
+            if len(input_data_reg) != len(regression_features_needed):
+                missing_keys = set(regression_features_needed) - set(input_data_reg.keys())
+                raise ValueError(f"均价预测模型缺少输入特征: {missing_keys}")
 
-            if regression_missing_features: # 缺少特征
-                regression_pred_status = "insufficient_data"
-            else: # 特征齐全
-                input_df_reg = pd.DataFrame([input_data_reg])[regression_features_needed]
-                input_df_reg_scaled = scaler.transform(input_df_reg)
-                unit_price_pred = regression_model.predict(input_df_reg_scaled)[0]
-                regression_pred_result = max(0, float(unit_price_pred)) # 存储预测值
-                regression_pred_status = "success"
+            input_df_reg = pd.DataFrame([input_data_reg])[regression_features_needed] # Ensure column order
+            input_df_reg_scaled = scaler.transform(input_df_reg)
+            unit_price_pred_raw = regression_model.predict(input_df_reg_scaled)[0]
+            unit_price_pred_value = max(0, unit_price_pred_raw) # Ensure non-negative
+            unit_price_pred_display = f"{unit_price_pred_value:,.0f}" # Format for display
         except Exception as e:
-            regression_pred_status = "error"
-            regression_error_msg = f"均价预测模型运行时出错: {e}"
-            runtime_errors.append(regression_error_msg)
-            print(regression_error_msg)
+            msg = f"均价预测模型预测出错: {e}"
+            print(msg)
+            error_messages.append(msg)
+            unit_price_pred_display = "预测失败"
+            unit_price_pred_value = -1
+    prediction_results['unit_price_display'] = unit_price_pred_display
+    prediction_results['unit_price_value'] = unit_price_pred_value
+
+    # --- 结果显示区域 (左对齐，无描述，颜色保留) ---
+    st.markdown("---")
+    st.subheader("📈 预测结果分析")
+
+    # Define colors
+    market_color = "#1f77b4"  # Blue
+    price_level_color_high = "#E74C3C" # Red for '高于'
+    price_level_color_low = "#2ECC71" # Green for '不高于'
+    price_level_color_default = "#ff7f0e" # Orange (default/error)
+    unit_price_color = "#2ca02c" # Green
+    insufficient_data_color = "#7f7f7f" # Grey for insufficient data
+    error_color = "#d62728" # Darker Red for errors
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1: # 市场细分
+        st.markdown(f"<h5 style='color: {market_color}; margin-bottom: 5px;'>市场细分</h5>", unsafe_allow_html=True)
+        market_result = prediction_results['market']
+        if "数据不足" in market_result:
+            st.markdown(f"<p style='font-size: 18px; color: {insufficient_data_color}; margin-bottom: 10px;'>{market_result}</p>", unsafe_allow_html=True)
+        elif "失败" in market_result or "无效" in market_result:
+             st.markdown(f"<p style='font-size: 18px; font-weight: bold; color: {error_color}; margin-bottom: 10px;'>{market_result}</p>", unsafe_allow_html=True)
+        else:
+             st.markdown(f"<p style='font-size: 24px; font-weight: bold; color: {market_color}; margin-bottom: 10px;'>{market_result}</p>", unsafe_allow_html=True)
 
 
-        # --- 结果显示区域 (已简化) ---
-        st.markdown("---")
-        st.subheader("📈 预测结果分析")
+    with col2: # 价格水平
+        st.markdown(f"<h5 style='color: {price_level_color_default}; margin-bottom: 5px;'>价格水平 (相对区域)</h5>", unsafe_allow_html=True)
+        price_level_result = prediction_results['price_level']
+        price_level_code = prediction_results['price_level_code']
 
-        market_color = "#1f77b4"
-        price_level_base_color = "#ff7f0e"
-        unit_price_color = "#2ca02c"
-        error_color = "#E74C3C"
-        success_color = "#2ECC71"
-        grey_color = "#7f7f7f"
-        warning_color = "#F39C12" # 用于数据不足
+        if "数据不足" in price_level_result:
+             st.markdown(f"<p style='font-size: 18px; color: {insufficient_data_color}; margin-bottom: 10px;'>{price_level_result}</p>", unsafe_allow_html=True)
+        elif "失败" in price_level_result or "无效" in price_level_result:
+             st.markdown(f"<p style='font-size: 18px; font-weight: bold; color: {error_color}; margin-bottom: 10px;'>{price_level_result}</p>", unsafe_allow_html=True)
+        else:
+            # Assign color based on prediction code (assuming 1 means '高于', 0 means '不高于')
+             display_color = price_level_color_default # Default
+             if price_level_code == 1: display_color = price_level_color_high
+             elif price_level_code == 0: display_color = price_level_color_low
+             st.markdown(f"<p style='font-size: 24px; font-weight: bold; color: {display_color}; margin-bottom: 10px;'>{price_level_result}</p>", unsafe_allow_html=True)
 
-        col1, col2, col3 = st.columns(3)
+    with col3: # 均价预测
+        st.markdown(f"<h5 style='color: {unit_price_color}; margin-bottom: 5px;'>均价预测</h5>", unsafe_allow_html=True)
+        unit_price_result = prediction_results['unit_price_display']
+        unit_price_value = prediction_results['unit_price_value']
 
-        with col1: # 市场细分
-            st.markdown(f"<h5 style='color: {market_color}; margin-bottom: 5px;'>市场细分</h5>", unsafe_allow_html=True)
-            if market_pred_status == "success":
-                st.markdown(f"<p style='font-size: 28px; font-weight: bold; color: {market_color}; margin-bottom: 10px;'>{market_pred_result}</p>", unsafe_allow_html=True)
-            elif market_pred_status == "insufficient_data":
-                st.warning("数据不足") # 显示数据不足
-            elif market_pred_status == "error":
-                st.error("预测出错") # 显示运行时错误
-            else: # not_run
-                 st.markdown(f"<p style='font-size: small; color: {grey_color};'>未运行</p>", unsafe_allow_html=True)
-
-            with st.expander("查看使用/缺失特征"):
-                if market_pred_status == "insufficient_data":
-                    st.caption(f"需要但缺失: {', '.join(market_missing_features)}")
-                elif market_features_needed:
-                    st.caption(f"模型使用: {', '.join(market_features_needed)}")
-                if market_pred_status == "error":
-                     st.caption(f"错误: {market_error_msg}")
+        if "数据不足" in unit_price_result:
+            st.markdown(f"<p style='font-size: 18px; color: {insufficient_data_color}; margin-bottom: 10px;'>{unit_price_result}</p>", unsafe_allow_html=True)
+        elif "失败" in unit_price_result or unit_price_value == -1: # Check for error state
+            st.markdown(f"<p style='font-size: 18px; font-weight: bold; color: {error_color}; margin-bottom: 10px;'>{unit_price_result}</p>", unsafe_allow_html=True)
+        else:
+            # Display the formatted price with units
+            st.markdown(f"<p style='font-size: 24px; font-weight: bold; color: {unit_price_color}; margin-bottom: 10px;'>{unit_price_result} <span style='font-size: small; color: grey;'>元/㎡</span></p>", unsafe_allow_html=True)
 
 
-        with col2: # 价格水平
-            st.markdown(f"<h5 style='color: {price_level_base_color}; margin-bottom: 5px;'>价格水平 (相对区域)</h5>", unsafe_allow_html=True)
-            if price_level_pred_status == "success":
-                label, code = price_level_pred_result
-                if code == 1: display_color = error_color   # 高于 (红)
-                elif code == 0: display_color = success_color # 不高于 (绿)
-                else: display_color = grey_color             # 未知 (灰)
-                st.markdown(f"<p style='font-size: 28px; font-weight: bold; color: {display_color}; margin-bottom: 10px;'>{label}</p>", unsafe_allow_html=True)
-            elif price_level_pred_status == "insufficient_data":
-                st.warning("数据不足") # <--- 修改点：显示数据不足
-            elif price_level_pred_status == "error":
-                st.error("预测出错")
-            else: # not_run
-                 st.markdown(f"<p style='font-size: small; color: {grey_color};'>未运行</p>", unsafe_allow_html=True)
-
-            with st.expander("查看使用/缺失特征"):
-                 if price_level_pred_status == "insufficient_data":
-                    st.caption(f"需要但缺失: {', '.join(price_level_missing_features)}")
-                 elif feature_names.get('price_level'):
-                    st.caption(f"模型使用: {', '.join(feature_names['price_level'])}")
-                 if price_level_pred_status == "error":
-                     st.caption(f"错误: {price_level_error_msg}")
-
-
-        with col3: # 均价预测
-            st.markdown(f"<h5 style='color: {unit_price_color}; margin-bottom: 5px;'>均价预测</h5>", unsafe_allow_html=True)
-            if regression_pred_status == "success":
-                 # --- 修改点：移除标签，只显示值 ---
-                 st.markdown(f"""
-                    <div style='margin-bottom: 10px;'>
-                        <p style='font-size: 28px; font-weight: bold; color: {unit_price_color}; margin-top: 0px;'>
-                            {regression_pred_result:,.0f}
-                        </p>
-                    </div>
-                    """, unsafe_allow_html=True)
-            elif regression_pred_status == "insufficient_data":
-                 st.warning("数据不足")
-            elif regression_pred_status == "error":
-                 st.error("预测出错")
-            else: # not_run
-                 st.markdown(f"<p style='font-size: small; color: {grey_color};'>未运行</p>", unsafe_allow_html=True)
-
-            with st.expander("查看使用/缺失特征"):
-                 st.info("提示：该预测通常不依赖'总价'输入。")
-                 if regression_pred_status == "insufficient_data":
-                    st.caption(f"需要但缺失: {', '.join(regression_missing_features)}")
-                 elif feature_names.get('regression'):
-                    st.caption(f"模型使用: {', '.join(feature_names['regression'])}")
-                 if regression_pred_status == "error":
-                     st.caption(f"错误: {regression_error_msg}")
-
-
-        # --- 显示总体状态和运行时错误 ---
-        st.markdown("---")
-        if runtime_errors:
-             st.error("预测过程中发生运行时错误：")
-             for i, msg in enumerate(runtime_errors):
-                 st.markdown(f"{i+1}. {msg}")
-        elif any(status == "insufficient_data" for status in [market_pred_status, price_level_pred_status, regression_pred_status]):
-            st.warning("部分预测因缺少必要输入数据而无法完成。请在侧边栏提供所需信息。")
-        elif all(status == "success" or status == "not_run" for status in [market_pred_status, price_level_pred_status, regression_pred_status]):
-             # 只有在没有运行时错误，并且没有“数据不足”的情况下才显示完全成功
-             st.success("✅ 分析完成！请查看上方结果。")
-
-        st.info("💡 **提示:** 预测结果仅供参考，实际交易价格受多重因素影响。")
+    # --- Final Status Message ---
+    st.markdown("---")
+    if not error_messages:
+         # Check if any prediction was hampered by insufficient data
+         insufficient_data_count = sum(1 for res in prediction_results.values() if isinstance(res, str) and "数据不足" in res)
+         if insufficient_data_count > 0:
+              st.info(f"✅ 分析已尝试。部分预测因缺少必要选择项输入而无法完成，请查看上方结果。")
+         else:
+              st.success("✅ 分析预测完成！请查看上方结果。")
+         st.info("💡 **提示:** 模型预测结果是基于历史数据和输入特征的估计，仅供参考。实际交易价格受市场供需、具体房况、谈判等多种因素影响。")
+    else:
+         st.warning("⚠️ 分析过程中遇到错误，部分或全部预测未能完成。")
+         for msg in error_messages:
+              st.error(f"错误详情: {msg}")
 
 # --- 页脚信息 ---
 st.sidebar.markdown("---")
